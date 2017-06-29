@@ -101,6 +101,18 @@ public class DAG {
   private Map<String,String> dagConf = new HashMap<String, String>();
   private VertexExecutionContext defaultExecutionContext;
 
+  // qoop: changes for storing alternate DAGs
+  private List<DAG> alternateDAGs;
+
+  public void setAlternateDAGs(List<DAG> alternateDAGs) {
+    this.alternateDAGs = alternateDAGs;
+  }
+
+  public List<DAG> getAlternateDAGs() {
+    return alternateDAGs;
+  }
+  // qoop: end of changes
+
   private DAG(String name) {
     this.name = name;
   }

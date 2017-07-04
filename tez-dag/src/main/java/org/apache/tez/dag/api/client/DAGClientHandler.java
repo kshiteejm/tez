@@ -140,6 +140,13 @@ public class DAGClientHandler {
     return dagAppMaster.submitDAGToAppMaster(dagPlan, additionalAmResources);
   }
 
+  // qoop: begin change
+  public synchronized String submitDAG(List<DAGPlan> dagPlans,
+      Map<String, LocalResource> additionalAmResources) throws TezException {
+    return dagAppMaster.submitDAGToAppMaster(dagPlans, additionalAmResources);
+  }
+  // qoop: end change
+
   // Only to be invoked by the DAGClient.
   public synchronized void shutdownAM() throws TezException {
     String message = "Received message to shutdown AM from " + getClientInfo();

@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
+import java.util.LinkedList;
 
 import javax.annotation.Nullable;
 
@@ -554,14 +556,27 @@ public class TezClient {
       dag.setConf(TezConfiguration.TEZ_DAG_HISTORY_LOGGING_ENABLED, "false");
       dagClientConf.setBoolean(TezConfiguration.TEZ_DAG_HISTORY_LOGGING_ENABLED, false);
     }
+    // qoop: begin change
+    List<DAGPlan> dagPlans = new LinkedList<DAGPlan>();
 
     Map<String, LocalResource> tezJarResources = getTezJarResources(sessionCredentials);
     DAGPlan dagPlan = TezClientUtils.prepareAndCreateDAGPlan(dag, amConfig, tezJarResources,
         usingTezArchiveDeploy, sessionCredentials, aclConfigs, servicePluginsDescriptor,
         javaOptsChecker);
 
+    dagPlans.add(dagPlan);
+
+    for (DAG altdag: dag.getAlternateDAGs()) {
+        dagPlan = TezClientUtils.prepareAndCreateDAGPlan(altdag, amConfig, tezJarResources, 
+                usingTezArchiveDeploy, sessionCredentials, aclConfigs, servicePluginsDescriptor, 
+                javaOptsChecker);
+        dagPlans.add(dagPlan);
+    }
+
     SubmitDAGRequestProto.Builder requestBuilder = SubmitDAGRequestProto.newBuilder();
-    requestBuilder.setDAGPlan(dagPlan);
+    requestBuilder.addAllDAGPlan(dagPlans);
+    // requestBuilder.setDAGPlan(dagPlan);
+    // qoop: end change
     if (!additionalLocalResources.isEmpty()) {
       requestBuilder.setAdditionalAmResources(DagTypeConverters
           .convertFromLocalResources(additionalLocalResources));

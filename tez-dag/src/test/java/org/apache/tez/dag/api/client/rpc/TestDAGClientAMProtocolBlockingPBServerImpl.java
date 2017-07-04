@@ -94,7 +94,8 @@ public class TestDAGClientAMProtocolBlockingPBServerImpl {
     Map<String, LocalResource> localResources = new HashMap<>();
     localResources.put(lrName, localResource);
 
-    SubmitDAGRequestProto.Builder requestBuilder = SubmitDAGRequestProto.newBuilder().setDAGPlan(dagPlan)
+    // qoop
+    SubmitDAGRequestProto.Builder requestBuilder = SubmitDAGRequestProto.newBuilder().addDAGPlan(dagPlan)
         .setAdditionalAmResources(DagTypeConverters.convertFromLocalResources(localResources));
     try (FileOutputStream fileOutputStream = new FileOutputStream(requestFile)) {
       requestBuilder.build().writeTo(fileOutputStream);

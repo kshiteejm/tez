@@ -166,13 +166,16 @@ public class DAGClientAMProtocolBlockingPBServerImpl implements DAGClientAMProto
           throw wrapException(e);
         }
       }
-      DAGPlan dagPlan = request.getDAGPlan();
+      // qoop: begin change
+      List<DAGPlan> dagPlans = request.getDAGPlanList();
+      // DAGPlan dagPlan = dagPlans.get(0);
       Map<String, LocalResource> additionalResources = null;
       if (request.hasAdditionalAmResources()) {
         additionalResources = DagTypeConverters.convertFromPlanLocalResources(request
             .getAdditionalAmResources());
       }
-      String dagId = real.submitDAG(dagPlan, additionalResources);
+      String dagId = real.submitDAG(dagPlans, additionalResources);
+      // qoop: end change
       return SubmitDAGResponseProto.newBuilder().setDagId(dagId).build();
     } catch(TezException e) {
       throw wrapException(e);

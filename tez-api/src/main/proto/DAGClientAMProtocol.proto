@@ -61,7 +61,9 @@ message TryKillDAGResponseProto {
 }
 
 message SubmitDAGRequestProto {
-  optional DAGPlan d_a_g_plan = 1;
+  // qoop: begin change
+  repeated DAGPlan d_a_g_plan = 1;
+  // qoop: end change
   optional PlanLocalResourcesProto additional_am_resources = 2;
   optional string serializedRequestPath = 3;
 }

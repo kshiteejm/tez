@@ -970,6 +970,12 @@ public class DAGAppMaster extends AbstractService {
     return createDAG(dagPB, null);
   }
 
+  // qoop: begin change
+  protected DAG createDAG(List<DAGPlan> dagPBs) {
+    return createDAG(dagPBs, null);
+  }
+  // qoop: end change
+
   /** Create and initialize (but don't start) a single dag. */
   DAGImpl createDAG(DAGPlan dagPB, TezDAGID dagId) {
     if (dagId == null) {
@@ -1024,6 +1030,55 @@ public class DAGAppMaster extends AbstractService {
     return className;
   }
 
+  // qoop: begin change
+  /** Create and initialize (but don't start) a single dag. */
+  DAGImpl createDAG(List<DAGPlan> dagPBs, TezDAGID dagId) {
+    DAGPlan dagPB = dagPBs.get(0);
+
+    if (dagId == null) {
+      dagId = TezDAGID.getInstance(appAttemptID.getApplicationId(),
+          dagCounter.incrementAndGet());
+    }
+
+    Credentials dagCredentials = null;
+    if (dagPB.hasCredentialsBinary()) {
+      dagCredentials = DagTypeConverters.convertByteStringToCredentials(dagPB
+          .getCredentialsBinary());
+      TezCommonUtils.logCredentials(LOG, dagCredentials, "dag");
+    } else {
+      dagCredentials = new Credentials();
+    }
+    if (getConfig().getBoolean(TezConfiguration.TEZ_AM_CREDENTIALS_MERGE,
+        TezConfiguration.TEZ_AM_CREDENTIALS_MERGE_DEFAULT)) {
+      LOG.info("Merging AM credentials into DAG credentials");
+      dagCredentials.mergeAll(amCredentials);
+    }
+
+    // TODO Does this move to the client in case of work-preserving recovery.
+    TokenCache.setSessionToken(sessionToken, dagCredentials);
+
+    // create single dag
+    DAGImpl newDag =
+        new DAGImpl(dagId, amConf, dagPB, dispatcher.getEventHandler(),
+            taskCommunicatorManager, dagCredentials, clock,
+            appMasterUgi.getShortUserName(),
+            taskHeartbeatHandler, context);
+
+    try {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("JSON dump for submitted DAG, dagId=" + dagId.toString()
+            + ", json="
+            + DAGUtils.generateSimpleJSONPlan(dagPB).toString());
+      }
+    } catch (JSONException e) {
+      LOG.warn("Failed to generate json for DAG", e);
+    }
+
+    generateDAGVizFile(dagId, dagPB, logDirs);
+    writePBTextFile(newDag);
+    return newDag;
+  } // end createDag()
+  // qoop: end change
 
   private String sanitizeLabelForViz(String label) {
     Matcher m = sanitizeLabelPattern.matcher(label);
@@ -1381,6 +1436,62 @@ public class DAGAppMaster extends AbstractService {
       return currentDAG.getID().toString();
     }
   }
+
+  // qoop: begin change
+  public String submitDAGToAppMaster(List<DAGPlan> dagPlans,
+      Map<String, LocalResource> additionalResources) throws TezException {
+    // qoop: begin change
+    DAGPlan dagPlan = dagPlans.get(0);
+    // qoop: end change
+    
+    if (sessionStopped.get()) {
+      throw new SessionNotRunning("AM unable to accept new DAG submissions."
+          + " In the process of shutting down");
+    }
+
+    // dag is in cleanup when dag state is completed but AM state is still RUNNING
+    synchronized (idleStateLock) {
+      while (currentDAG != null && currentDAG.isComplete() && state == DAGAppMasterState.RUNNING) {
+        try {
+          LOG.info("wait for previous dag cleanup");
+          idleStateLock.wait();
+        } catch (InterruptedException e) {
+          throw new TezException(e);
+        }
+      }
+    }
+
+    synchronized (this) {
+      if (this.versionMismatch) {
+        throw new TezException("Unable to accept DAG submissions as the ApplicationMaster is"
+            + " incompatible with the client. " + versionMismatchDiagnostics);
+      }
+      if (state.equals(DAGAppMasterState.ERROR)
+              || sessionStopped.get()) {
+        throw new SessionNotRunning("AM unable to accept new DAG submissions."
+                + " In the process of shutting down");
+      }
+      if (currentDAG != null
+          && !currentDAG.isComplete()) {
+        throw new TezException("App master already running a DAG");
+      }
+      // RPC server runs in the context of the job user as it was started in
+      // the job user's UGI context
+      LOG.info("Starting DAG submitted via RPC: " + dagPlan.getName());
+
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Invoked with additional local resources: " + additionalResources);
+      }
+      if (dagPlan.getName().startsWith(TezConstants.TEZ_PREWARM_DAG_NAME_PREFIX)) {
+        submittedDAGs.incrementAndGet();
+      }
+      // qoop: begin change
+      startDAG(dagPlans, additionalResources);
+      // qoop: end change
+      return currentDAG.getID().toString();
+    }
+  }
+  // qoop: end change
 
   @SuppressWarnings("unchecked")
   public void tryKillDAG(DAG dag, String message) throws TezException {
@@ -2492,6 +2603,73 @@ public class DAGAppMaster extends AbstractService {
     // set state after curDag is set
     this.state = DAGAppMasterState.RUNNING;
   }
+
+  // qoop: begin change
+  private void startDAG(List<DAGPlan> dagPlans, Map<String, LocalResource> additionalAMResources)
+      throws TezException {
+    DAGPlan dagPlan = dagPlans.get(0);
+
+    long submitTime = this.clock.getTime();
+    this.appName = dagPlan.getName();
+
+    // /////////////////// Create the job itself.
+    final DAG newDAG = createDAG(dagPlan);
+    _updateLoggers(newDAG, "");
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Running a DAG with " + dagPlan.getVertexCount()
+          + " vertices ");
+      for (VertexPlan v : dagPlan.getVertexList()) {
+        LOG.debug("DAG has vertex " + v.getName());
+      }
+    }
+    Map<String, LocalResource> lrDiff = getAdditionalLocalResourceDiff(
+        newDAG, additionalAMResources);
+    if (lrDiff != null) {
+      amResources.putAll(lrDiff);
+      cumulativeAdditionalResources.putAll(lrDiff);
+    }
+
+    String callerContextStr = "";
+    if (dagPlan.hasCallerContext()) {
+      CallerContext callerContext = DagTypeConverters.convertCallerContextFromProto(
+          dagPlan.getCallerContext());
+      callerContextStr = ", callerContext=" + callerContext.contextAsSimpleString();
+    }
+    LOG.info("Running DAG: " + dagPlan.getName() + callerContextStr);
+
+    String timeStamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Calendar.getInstance().getTime());
+    System.err.println(timeStamp + " Running Dag: " + newDAG.getID());
+    System.out.println(timeStamp + " Running Dag: "+ newDAG.getID());
+
+    // Job name is the same as the app name until we support multiple dags
+    // for an app later
+    final DAGSubmittedEvent submittedEvent = new DAGSubmittedEvent(newDAG.getID(),
+        submitTime, dagPlan, this.appAttemptID, cumulativeAdditionalResources,
+        newDAG.getUserName(), newDAG.getConf(), containerLogs);
+    boolean dagLoggingEnabled = newDAG.getConf().getBoolean(
+        TezConfiguration.TEZ_DAG_HISTORY_LOGGING_ENABLED,
+        TezConfiguration.TEZ_DAG_HISTORY_LOGGING_ENABLED_DEFAULT);
+    submittedEvent.setHistoryLoggingEnabled(dagLoggingEnabled);
+    try {
+       appMasterUgi.doAs(new PrivilegedExceptionAction<Void>() {
+         @Override
+         public Void run() throws Exception {
+           historyEventHandler.handleCriticalEvent(
+               new DAGHistoryEvent(newDAG.getID(), submittedEvent));
+           return null;
+         }
+       });
+    } catch (IOException e) {
+      throw new TezUncheckedException(e);
+    } catch (InterruptedException e) {
+      throw new TezUncheckedException(e);
+    }
+
+    startDAGExecution(newDAG, lrDiff);
+    // set state after curDag is set
+    this.state = DAGAppMasterState.RUNNING;
+  }
+  // qoop: end change
 
   private void startDAGExecution(DAG dag, final Map<String, LocalResource> additionalAmResources)
       throws TezException {

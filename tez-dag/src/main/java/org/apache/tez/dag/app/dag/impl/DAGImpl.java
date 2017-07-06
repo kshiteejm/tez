@@ -204,8 +204,14 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
   // Useful when trying to serialize only the diff from global configs
   private final Configuration dagOnlyConf;
 
+  // qoop: begin change
+  // jobPlan is current DAGPlan
   private final DAGPlan jobPlan;
-
+  
+  private final List<DAGPlan> jobPlans;
+  // list of all logically equivalent jobPlans
+  // qoop: end change
+  
   private final AtomicBoolean internalErrorTriggered = new AtomicBoolean(false);
 
   Map<String, LocalResource> localResources;
@@ -503,6 +509,9 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
       AppContext appContext) {
     this.dagId = dagId;
     this.jobPlan = jobPlan;
+    // qoop: begin change
+    this.jobPlans = new ArrayList<DAGPlan>();
+    // qoop: end change
     this.dagConf = new Configuration(amConf);
     this.dagOnlyConf = new Configuration(false);
     Iterator<PlanKeyValuePair> iter =
@@ -561,6 +570,79 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
     this.entityUpdateTracker = new StateChangeNotifier(this);
   }
 
+  // qoop: begin change
+  public DAGImpl(TezDAGID dagId,
+	      Configuration amConf,
+	      List<DAGPlan> jobPlans,
+	      EventHandler eventHandler,
+	      TaskCommunicatorManagerInterface taskCommunicatorManagerInterface,
+	      Credentials dagCredentials,
+	      Clock clock,
+	      String appUserName,
+	      TaskHeartbeatHandler thh,
+	      AppContext appContext) {
+	    this.dagId = dagId;
+	    this.jobPlan = jobPlans.get(0);
+	    this.jobPlans = new ArrayList<DAGPlan>(jobPlans);
+	    this.dagConf = new Configuration(amConf);
+	    this.dagOnlyConf = new Configuration(false);
+	    Iterator<PlanKeyValuePair> iter =
+	        jobPlan.getDagConf().getConfKeyValuesList().iterator();
+	    // override the amConf by using DAG level configuration
+	    while (iter.hasNext()) {
+	      PlanKeyValuePair keyValPair = iter.next();
+	      TezConfiguration.validateProperty(keyValPair.getKey(), Scope.DAG);
+	      this.dagConf.set(keyValPair.getKey(), keyValPair.getValue());
+	      this.dagOnlyConf.set(keyValPair.getKey(), keyValPair.getValue());
+	    }
+	    this.dagName = (jobPlan.getName() != null) ? jobPlan.getName() : "<missing app name>";
+	    this.userName = appUserName;
+	    this.clock = clock;
+	    this.appContext = appContext;
+
+	    this.taskCommunicatorManagerInterface = taskCommunicatorManagerInterface;
+	    this.taskHeartbeatHandler = thh;
+	    this.eventHandler = eventHandler;
+	    ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+	    this.readLock = readWriteLock.readLock();
+	    this.writeLock = readWriteLock.writeLock();
+
+	    this.localResources = DagTypeConverters.createLocalResourceMapFromDAGPlan(jobPlan
+	        .getLocalResourceList());
+
+	    this.credentials = dagCredentials;
+	    if (this.credentials == null) {
+	      try {
+	        dagUGI = UserGroupInformation.getCurrentUser();
+	      } catch (IOException e) {
+	        throw new TezUncheckedException("Failed to set UGI for dag based on currentUser", e);
+	      }
+	    } else {
+	      dagUGI = UserGroupInformation.createRemoteUser(this.userName);
+	      dagUGI.addCredentials(this.credentials);
+	    }
+
+	    this.aclManager = new ACLManager(appContext.getAMACLManager(), dagUGI.getShortUserName(),
+	        this.dagConf);
+	    // this is only for recovery in case it does not call the init transition
+	    this.startDAGCpuTime = appContext.getCumulativeCPUTime();
+	    this.startDAGGCTime = appContext.getCumulativeGCTime();
+	    if (jobPlan.hasDefaultExecutionContext()) {
+	      defaultExecutionContext = DagTypeConverters.convertFromProto(jobPlan.getDefaultExecutionContext());
+	    } else {
+	      defaultExecutionContext = null;
+	    }
+	    
+	    this.taskSpecificLaunchCmdOption = new TaskSpecificLaunchCmdOption(dagConf);
+	    // This "this leak" is okay because the retained pointer is in an
+	    //  instance variable.
+	    stateMachine = new StateMachineTez<DAGState, DAGEventType, DAGEvent, DAGImpl>(
+	        stateMachineFactory.make(this), this);
+	    augmentStateMachine();
+	    this.entityUpdateTracker = new StateChangeNotifier(this);
+	  }
+  	  // qoop: end change
+  
   private void augmentStateMachine() {
     stateMachine
         .registerStateEnteredCallback(DAGState.SUCCEEDED,
@@ -612,6 +694,13 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
     return jobPlan;
   }
 
+  // qoop: begin change
+  @Override
+  public List<DAGPlan> getJobPlans() {
+    return jobPlans;
+  }
+  // qoop: end change
+  
   @Override
   public EventHandler getEventHandler() {
     return this.eventHandler;

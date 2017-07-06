@@ -1058,8 +1058,9 @@ public class DAGAppMaster extends AbstractService {
     TokenCache.setSessionToken(sessionToken, dagCredentials);
 
     // create single dag
+    // this single dag should contain all the dagPlans - dagPBs
     DAGImpl newDag =
-        new DAGImpl(dagId, amConf, dagPB, dispatcher.getEventHandler(),
+        new DAGImpl(dagId, amConf, dagPBs, dispatcher.getEventHandler(),
             taskCommunicatorManager, dagCredentials, clock,
             appMasterUgi.getShortUserName(),
             taskHeartbeatHandler, context);
@@ -2613,7 +2614,8 @@ public class DAGAppMaster extends AbstractService {
     this.appName = dagPlan.getName();
 
     // /////////////////// Create the job itself.
-    final DAG newDAG = createDAG(dagPlan);
+    // need to store multiple dagPlan's in DAG (or rather DAGImpl)
+    final DAG newDAG = createDAG(dagPlans);
     _updateLoggers(newDAG, "");
     if (LOG.isDebugEnabled()) {
       LOG.debug("Running a DAG with " + dagPlan.getVertexCount()
@@ -2643,6 +2645,7 @@ public class DAGAppMaster extends AbstractService {
 
     // Job name is the same as the app name until we support multiple dags
     // for an app later
+    // qoop: todo: multiple dagPlan support in DAGSubmitted event?
     final DAGSubmittedEvent submittedEvent = new DAGSubmittedEvent(newDAG.getID(),
         submitTime, dagPlan, this.appAttemptID, cumulativeAdditionalResources,
         newDAG.getUserName(), newDAG.getConf(), containerLogs);

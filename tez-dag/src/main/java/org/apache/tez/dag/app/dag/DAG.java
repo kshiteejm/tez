@@ -77,6 +77,7 @@ public interface DAG extends DagInfo {
 
   Configuration getConf();
 
+  List<DAGPlan> getJobPlans();
   DAGPlan getJobPlan();
   DAGStatusBuilder getDAGStatus(Set<StatusGetOpts> statusOptions);
   DAGStatusBuilder getDAGStatus(Set<StatusGetOpts> statusOptions, long timeout)

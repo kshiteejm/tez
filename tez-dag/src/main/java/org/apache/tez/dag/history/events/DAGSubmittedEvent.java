@@ -21,6 +21,7 @@ package org.apache.tez.dag.history.events;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -51,7 +52,9 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
   private String dagName;
   private long submitTime;
   private DAGProtos.DAGPlan dagPlan;
+  // qoop: begin changes
   private List<DAGProtos.DAPlan> dagPlans;
+  // qoop: end changes
   private ApplicationAttemptId applicationAttemptId;
   private String user;
   private Map<String, LocalResource> cumulativeAdditionalLocalResources;
@@ -77,6 +80,7 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
     this.containerLogs = containerLogs;
   }
   
+  // qoop: begin changes
   public DAGSubmittedEvent(TezDAGID dagID, long submitTime,
 	      List<DAGProtos.DAGPlan> dagPlans, ApplicationAttemptId applicationAttemptId,
 	      Map<String, LocalResource> cumulativeAdditionalLocalResources,
@@ -91,7 +95,8 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
 	    this.user = user;
 	    this.conf = conf;
 	    this.containerLogs = containerLogs;
-	  }
+  }
+  // qoop: end changes
 
   @Override
   public HistoryEventType getEventType() {

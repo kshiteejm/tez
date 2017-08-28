@@ -82,19 +82,19 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
   
   // qoop: begin changes
   public DAGSubmittedEvent(TezDAGID dagID, long submitTime,
-	      List<DAGProtos.DAGPlan> dagPlans, ApplicationAttemptId applicationAttemptId,
-	      Map<String, LocalResource> cumulativeAdditionalLocalResources,
-	      String user, Configuration conf, String containerLogs) {
-	    this.dagID = dagID;
-	    this.dagName = dagPlan.getName();
-	    this.submitTime = submitTime;
-	    this.dagPlan = dagPlans.get(0);
-	    this.dagPlans = dagPlans; 
-	    this.applicationAttemptId = applicationAttemptId;
-	    this.cumulativeAdditionalLocalResources = cumulativeAdditionalLocalResources;
-	    this.user = user;
-	    this.conf = conf;
-	    this.containerLogs = containerLogs;
+      List<DAGProtos.DAGPlan> dagPlans, ApplicationAttemptId applicationAttemptId,
+      Map<String, LocalResource> cumulativeAdditionalLocalResources,
+      String user, Configuration conf, String containerLogs) {
+    this.dagID = dagID;
+    this.dagName = dagPlans.get(0).getName();
+    this.submitTime = submitTime;
+    this.dagPlan = dagPlans.get(0);
+    this.dagPlans = dagPlans; 
+    this.applicationAttemptId = applicationAttemptId;
+    this.cumulativeAdditionalLocalResources = cumulativeAdditionalLocalResources;
+    this.user = user;
+    this.conf = conf;
+    this.containerLogs = containerLogs;
   }
   // qoop: end changes
 

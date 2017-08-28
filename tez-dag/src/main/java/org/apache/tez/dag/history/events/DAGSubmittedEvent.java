@@ -53,7 +53,7 @@ public class DAGSubmittedEvent implements HistoryEvent, SummaryEvent {
   private long submitTime;
   private DAGProtos.DAGPlan dagPlan;
   // qoop: begin changes
-  private List<DAGProtos.DAPlan> dagPlans;
+  private List<DAGProtos.DAGPlan> dagPlans;
   // qoop: end changes
   private ApplicationAttemptId applicationAttemptId;
   private String user;

@@ -2645,9 +2645,9 @@ public class DAGAppMaster extends AbstractService {
 
     // Job name is the same as the app name until we support multiple dags
     // for an app later
-    // qoop: todo: multiple dagPlan support in DAGSubmitted event?
+    // qoop: todo: multiple dagPlan support in DAGSubmitted event
     final DAGSubmittedEvent submittedEvent = new DAGSubmittedEvent(newDAG.getID(),
-        submitTime, dagPlan, this.appAttemptID, cumulativeAdditionalResources,
+        submitTime, dagPlans, this.appAttemptID, cumulativeAdditionalResources,
         newDAG.getUserName(), newDAG.getConf(), containerLogs);
     boolean dagLoggingEnabled = newDAG.getConf().getBoolean(
         TezConfiguration.TEZ_DAG_HISTORY_LOGGING_ENABLED,

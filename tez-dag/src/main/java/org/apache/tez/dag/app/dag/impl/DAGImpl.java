@@ -39,6 +39,7 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import org.apache.avro.generic.GenericData;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.tez.common.TezUtilsInternal;
@@ -210,6 +211,12 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
   
   private final List<DAGPlan> jobPlans;
   // list of all logically equivalent jobPlans
+
+  private List<DAGImpl> alternateDags;
+
+  private boolean isAlternate;
+
+  private int currentChoice = 0;
   // qoop: end change
   
   private final AtomicBoolean internalErrorTriggered = new AtomicBoolean(false);
@@ -511,6 +518,9 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
     this.jobPlan = jobPlan;
     // qoop: begin change
     this.jobPlans = new ArrayList<DAGPlan>();
+    this.isAlternate = false;
+    this.currentChoice = 0;
+    this.alternateDags = new ArrayList<DAGImpl>();
     // qoop: end change
     this.dagConf = new Configuration(amConf);
     this.dagOnlyConf = new Configuration(false);
@@ -570,78 +580,171 @@ public class DAGImpl implements org.apache.tez.dag.app.dag.DAG,
     this.entityUpdateTracker = new StateChangeNotifier(this);
   }
 
+  public DAGImpl(TezDAGID dagId,
+      Configuration amConf,
+      DAGPlan jobPlan,
+      EventHandler eventHandler,
+      TaskCommunicatorManagerInterface taskCommunicatorManagerInterface,
+      Credentials dagCredentials,
+      Clock clock,
+      String appUserName,
+      TaskHeartbeatHandler thh,
+      AppContext appContext,
+      boolean isAlternate) {
+    this.dagId = dagId;
+    this.jobPlan = jobPlan;
+    // qoop: begin change
+    this.jobPlans = new ArrayList<DAGPlan>();
+    this.alternateDags = new ArrayList<DAGImpl>();
+    this.isAlternate = isAlternate;
+    if (!isAlternate)
+      this.currentChoice = 0;
+    else
+      this.currentChoice = -1;
+    // qoop: end change
+    this.dagConf = new Configuration(amConf);
+    this.dagOnlyConf = new Configuration(false);
+    Iterator<PlanKeyValuePair> iter =
+            jobPlan.getDagConf().getConfKeyValuesList().iterator();
+    // override the amConf by using DAG level configuration
+    while (iter.hasNext()) {
+      PlanKeyValuePair keyValPair = iter.next();
+      TezConfiguration.validateProperty(keyValPair.getKey(), Scope.DAG);
+      this.dagConf.set(keyValPair.getKey(), keyValPair.getValue());
+      this.dagOnlyConf.set(keyValPair.getKey(), keyValPair.getValue());
+    }
+    this.dagName = (jobPlan.getName() != null) ? jobPlan.getName() : "<missing app name>";
+    this.userName = appUserName;
+    this.clock = clock;
+    this.appContext = appContext;
+
+    this.taskCommunicatorManagerInterface = taskCommunicatorManagerInterface;
+    this.taskHeartbeatHandler = thh;
+    this.eventHandler = eventHandler;
+    ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    this.readLock = readWriteLock.readLock();
+    this.writeLock = readWriteLock.writeLock();
+
+    this.localResources = DagTypeConverters.createLocalResourceMapFromDAGPlan(jobPlan
+            .getLocalResourceList());
+
+    this.credentials = dagCredentials;
+    if (this.credentials == null) {
+      try {
+        dagUGI = UserGroupInformation.getCurrentUser();
+      } catch (IOException e) {
+        throw new TezUncheckedException("Failed to set UGI for dag based on currentUser", e);
+      }
+    } else {
+      dagUGI = UserGroupInformation.createRemoteUser(this.userName);
+      dagUGI.addCredentials(this.credentials);
+    }
+
+    this.aclManager = new ACLManager(appContext.getAMACLManager(), dagUGI.getShortUserName(),
+            this.dagConf);
+    // this is only for recovery in case it does not call the init transition
+    this.startDAGCpuTime = appContext.getCumulativeCPUTime();
+    this.startDAGGCTime = appContext.getCumulativeGCTime();
+    if (jobPlan.hasDefaultExecutionContext()) {
+      defaultExecutionContext = DagTypeConverters.convertFromProto(jobPlan.getDefaultExecutionContext());
+    } else {
+      defaultExecutionContext = null;
+    }
+
+    this.taskSpecificLaunchCmdOption = new TaskSpecificLaunchCmdOption(dagConf);
+    // This "this leak" is okay because the retained pointer is in an
+    //  instance variable.
+    stateMachine = new StateMachineTez<DAGState, DAGEventType, DAGEvent, DAGImpl>(
+            stateMachineFactory.make(this), this);
+    augmentStateMachine();
+    this.entityUpdateTracker = new StateChangeNotifier(this);
+  }
+
   // qoop: begin change
   public DAGImpl(TezDAGID dagId,
-	      Configuration amConf,
-	      List<DAGPlan> jobPlans,
-	      EventHandler eventHandler,
-	      TaskCommunicatorManagerInterface taskCommunicatorManagerInterface,
-	      Credentials dagCredentials,
-	      Clock clock,
-	      String appUserName,
-	      TaskHeartbeatHandler thh,
-	      AppContext appContext) {
-	    this.dagId = dagId;
-	    this.jobPlan = jobPlans.get(0);
-	    this.jobPlans = new ArrayList<DAGPlan>(jobPlans);
-	    this.dagConf = new Configuration(amConf);
-	    this.dagOnlyConf = new Configuration(false);
-	    Iterator<PlanKeyValuePair> iter =
-	        jobPlan.getDagConf().getConfKeyValuesList().iterator();
-	    // override the amConf by using DAG level configuration
-	    while (iter.hasNext()) {
-	      PlanKeyValuePair keyValPair = iter.next();
-	      TezConfiguration.validateProperty(keyValPair.getKey(), Scope.DAG);
-	      this.dagConf.set(keyValPair.getKey(), keyValPair.getValue());
-	      this.dagOnlyConf.set(keyValPair.getKey(), keyValPair.getValue());
-	    }
-	    this.dagName = (jobPlan.getName() != null) ? jobPlan.getName() : "<missing app name>";
-	    this.userName = appUserName;
-	    this.clock = clock;
-	    this.appContext = appContext;
+      Configuration amConf,
+      List<DAGPlan> jobPlans,
+      EventHandler eventHandler,
+      TaskCommunicatorManagerInterface taskCommunicatorManagerInterface,
+      Credentials dagCredentials,
+      Clock clock,
+      String appUserName,
+      TaskHeartbeatHandler thh,
+      AppContext appContext) {
+    this.dagId = dagId;
+    this.jobPlan = jobPlans.get(0);
+    this.jobPlans = new ArrayList<DAGPlan>(jobPlans);
+    this.isAlternate = false;
+    this.currentChoice = 0;
+    this.alternateDags = new ArrayList<DAGImpl>();
+    for (DAGPlan dagPB: jobPlans) {
+      DAGImpl alternateDag = new DAGImpl(dagId, amConf, dagPB, eventHandler, taskCommunicatorManagerInterface,
+              dagCredentials, clock, appUserName, thh, appContext, true);
+      this.alternateDags.add(alternateDag);
+    }
+    this.dagConf = new Configuration(amConf);
+    this.dagOnlyConf = new Configuration(false);
+    Iterator<PlanKeyValuePair> iter =
+        jobPlan.getDagConf().getConfKeyValuesList().iterator();
+    // override the amConf by using DAG level configuration
+    while (iter.hasNext()) {
+      PlanKeyValuePair keyValPair = iter.next();
+      TezConfiguration.validateProperty(keyValPair.getKey(), Scope.DAG);
+      this.dagConf.set(keyValPair.getKey(), keyValPair.getValue());
+      this.dagOnlyConf.set(keyValPair.getKey(), keyValPair.getValue());
+    }
+    this.dagName = (jobPlan.getName() != null) ? jobPlan.getName() : "<missing app name>";
+    this.userName = appUserName;
+    this.clock = clock;
+    this.appContext = appContext;
 
-	    this.taskCommunicatorManagerInterface = taskCommunicatorManagerInterface;
-	    this.taskHeartbeatHandler = thh;
-	    this.eventHandler = eventHandler;
-	    ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
-	    this.readLock = readWriteLock.readLock();
-	    this.writeLock = readWriteLock.writeLock();
+    this.taskCommunicatorManagerInterface = taskCommunicatorManagerInterface;
+    this.taskHeartbeatHandler = thh;
+    this.eventHandler = eventHandler;
+    ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    this.readLock = readWriteLock.readLock();
+    this.writeLock = readWriteLock.writeLock();
 
-	    this.localResources = DagTypeConverters.createLocalResourceMapFromDAGPlan(jobPlan
-	        .getLocalResourceList());
+    this.localResources = DagTypeConverters.createLocalResourceMapFromDAGPlan(jobPlan
+        .getLocalResourceList());
 
-	    this.credentials = dagCredentials;
-	    if (this.credentials == null) {
-	      try {
-	        dagUGI = UserGroupInformation.getCurrentUser();
-	      } catch (IOException e) {
-	        throw new TezUncheckedException("Failed to set UGI for dag based on currentUser", e);
-	      }
-	    } else {
-	      dagUGI = UserGroupInformation.createRemoteUser(this.userName);
-	      dagUGI.addCredentials(this.credentials);
-	    }
+    this.credentials = dagCredentials;
+    if (this.credentials == null) {
+      try {
+        dagUGI = UserGroupInformation.getCurrentUser();
+      } catch (IOException e) {
+        throw new TezUncheckedException("Failed to set UGI for dag based on currentUser", e);
+      }
+    } else {
+      dagUGI = UserGroupInformation.createRemoteUser(this.userName);
+      dagUGI.addCredentials(this.credentials);
+    }
 
-	    this.aclManager = new ACLManager(appContext.getAMACLManager(), dagUGI.getShortUserName(),
-	        this.dagConf);
-	    // this is only for recovery in case it does not call the init transition
-	    this.startDAGCpuTime = appContext.getCumulativeCPUTime();
-	    this.startDAGGCTime = appContext.getCumulativeGCTime();
-	    if (jobPlan.hasDefaultExecutionContext()) {
-	      defaultExecutionContext = DagTypeConverters.convertFromProto(jobPlan.getDefaultExecutionContext());
-	    } else {
-	      defaultExecutionContext = null;
-	    }
-	    
-	    this.taskSpecificLaunchCmdOption = new TaskSpecificLaunchCmdOption(dagConf);
-	    // This "this leak" is okay because the retained pointer is in an
-	    //  instance variable.
-	    stateMachine = new StateMachineTez<DAGState, DAGEventType, DAGEvent, DAGImpl>(
-	        stateMachineFactory.make(this), this);
-	    augmentStateMachine();
-	    this.entityUpdateTracker = new StateChangeNotifier(this);
-	  }
-  	  // qoop: end change
+    this.aclManager = new ACLManager(appContext.getAMACLManager(), dagUGI.getShortUserName(),
+        this.dagConf);
+    // this is only for recovery in case it does not call the init transition
+    this.startDAGCpuTime = appContext.getCumulativeCPUTime();
+    this.startDAGGCTime = appContext.getCumulativeGCTime();
+    if (jobPlan.hasDefaultExecutionContext()) {
+      defaultExecutionContext = DagTypeConverters.convertFromProto(jobPlan.getDefaultExecutionContext());
+    } else {
+      defaultExecutionContext = null;
+    }
+
+    this.taskSpecificLaunchCmdOption = new TaskSpecificLaunchCmdOption(dagConf);
+    // This "this leak" is okay because the retained pointer is in an
+    //  instance variable.
+    stateMachine = new StateMachineTez<DAGState, DAGEventType, DAGEvent, DAGImpl>(
+        stateMachineFactory.make(this), this);
+    augmentStateMachine();
+    this.entityUpdateTracker = new StateChangeNotifier(this);
+  }
+
+
+  public void setAlternateDags(List<DAGImpl> alternateDags) {
+    this.alternateDags = alternateDags;
+  }
+  // qoop: end change
   
   private void augmentStateMachine() {
     stateMachine
